@@ -99,7 +99,7 @@ export default function Home() {
   useEffect(() => {
     fetch("/api/socket");
 
-    const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001", {
+    const socket = io("http://localhost:3001", {
       transports: ["websocket"],
     });
     socketRef.current = socket;
