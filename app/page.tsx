@@ -99,7 +99,7 @@ export default function Home() {
   useEffect(() => {
     fetch("/api/socket");
 
-    const socket = io("http://localhost:3001", {
+    const socket = io("https://speakup-production-c093.up.railway.app", {
       transports: ["websocket"],
     });
     socketRef.current = socket;
