@@ -5,7 +5,6 @@ import { io, Socket } from "socket.io-client";
 
 const SOCKET_URL = "https://speakup-production-c093.up.railway.app";
 
-
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -28,12 +27,21 @@ interface Stats {
   todaySeconds: number;
 }
 
+interface FloatingReaction {
+  id: number;
+  emoji: string;
+  x: number;
+  from: "me" | "partner";
+}
+
 const LEVELS = ["Beginner", "Intermediate", "Advanced"];
 const COUNTRIES = [
   "Any", "India", "USA", "UK", "Australia", "Canada",
   "Germany", "France", "Japan", "Brazil", "Pakistan",
   "Bangladesh", "Nepal", "Sri Lanka", "Philippines",
 ];
+
+const REACTIONS = ["👍", "😂", "❤️", "👏", "🔥", "😮", "😢", "🎉"];
 
 function getNow() {
   const d = new Date();
@@ -63,12 +71,11 @@ function saveStats(stats: Stats) {
   localStorage.setItem("speakup_stats", JSON.stringify(stats));
 }
 
-// Push notification helper
 function sendNotification(title: string, body: string) {
   if (typeof window === "undefined") return;
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
-  if (!document.hidden) return; // sirf tab minimize hone pe
+  if (!document.hidden) return;
   new Notification(title, { body, icon: "/favicon.ico" });
 }
 
@@ -85,6 +92,9 @@ export default function Home() {
   const [unread, setUnread] = useState(0);
   const [activeTab, setActiveTab] = useState<"call" | "stats">("call");
   const [notifPermission, setNotifPermission] = useState<string>("default");
+  const [showReactions, setShowReactions] = useState(false);
+  const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
+  const reactionIdRef = useRef(0);
 
   // Filters
   const [selectedLevel, setSelectedLevel] = useState("Beginner");
@@ -105,7 +115,6 @@ export default function Home() {
   useEffect(() => { showChatRef.current = showChat; }, [showChat]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
-  // Check notification permission on load
   useEffect(() => {
     if (typeof window !== "undefined" && "Notification" in window) {
       setNotifPermission(Notification.permission);
@@ -116,6 +125,16 @@ export default function Home() {
     if (!("Notification" in window)) return;
     const perm = await Notification.requestPermission();
     setNotifPermission(perm);
+  };
+
+  // Add floating reaction animation
+  const addFloatingReaction = (emoji: string, from: "me" | "partner") => {
+    const id = reactionIdRef.current++;
+    const x = 20 + Math.random() * 60; // random x position %
+    setFloatingReactions((prev) => [...prev, { id, emoji, x, from }]);
+    setTimeout(() => {
+      setFloatingReactions((prev) => prev.filter((r) => r.id !== id));
+    }, 2500);
   };
 
   const startTimer = () => {
@@ -149,6 +168,8 @@ export default function Home() {
     if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
     stopTimer();
     setTimer(0);
+    setFloatingReactions([]);
+    setShowReactions(false);
   };
 
   const createPeer = (initiator: boolean, socket: Socket) => {
@@ -174,9 +195,8 @@ export default function Home() {
 
     socket.on("partner-found", ({ initiator, topic }: { initiator: boolean; topic: string }) => {
       setTopic(topic); setPartnerLeft(false); setMessages([]); setShowChat(false); setUnread(0);
-      showChatRef.current = false;
+      showChatRef.current = false; setFloatingReactions([]); setShowReactions(false);
       peerRef.current = createPeer(initiator, socket);
-      // 🔔 Notification — partner mila!
       sendNotification("SpeakUp 🎙️", "Partner mil gaya! Ab baat karo.");
     });
 
@@ -200,8 +220,13 @@ export default function Home() {
     socket.on("chat-message", ({ text }: { text: string }) => {
       setMessages((prev) => [...prev, { text, from: "partner", time: getNow() }]);
       if (!showChatRef.current) setUnread((u) => u + 1);
-      // 🔔 Notification — naya message
       sendNotification("SpeakUp 💬", `New message: ${text}`);
+    });
+
+    // Partner ka reaction receive karo
+    socket.on("reaction", (emoji: string) => {
+      addFloatingReaction(emoji, "partner");
+      sendNotification("SpeakUp " + emoji, `Partner ne react kiya: ${emoji}`);
     });
 
     socket.on("partner-left", () => {
@@ -211,13 +236,7 @@ export default function Home() {
   };
 
   useEffect(() => {
-    const socket = io(SOCKET_URL, {
-  transports: ["polling", "websocket"],
-  reconnectionAttempts: 10,
-  reconnectionDelay: 2000,
-  reconnectionDelayMax: 10000,
-  timeout: 20000,
-});
+    const socket = io(SOCKET_URL, { transports: ["websocket"] });
     socketRef.current = socket;
     socket.on("connect", () => console.log("Socket connected:", socket.id));
     setupSocketListeners(socket);
@@ -272,11 +291,37 @@ export default function Home() {
     setChatInput("");
   };
 
+  const sendReaction = (emoji: string) => {
+    socketRef.current?.emit("reaction", emoji);
+    addFloatingReaction(emoji, "me");
+    setShowReactions(false);
+  };
+
   return (
     <div
       className="min-h-screen bg-[#0d0f14] flex flex-col items-center justify-between px-4 py-8"
       style={{ backgroundImage: "radial-gradient(ellipse at 20% 50%, #0f2027 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, #0a1628 0%, transparent 50%)" }}
     >
+      <style>{`
+        @keyframes floatUp {
+          0% { transform: translateY(0) scale(1); opacity: 1; }
+          100% { transform: translateY(-120px) scale(1.5); opacity: 0; }
+        }
+        .float-reaction {
+          animation: floatUp 2.5s ease-out forwards;
+          position: absolute;
+          pointer-events: none;
+          font-size: 2rem;
+          z-index: 50;
+        }
+        @keyframes popIn {
+          0% { transform: scale(0.5); opacity: 0; }
+          70% { transform: scale(1.1); }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        .pop-in { animation: popIn 0.2s ease forwards; }
+      `}</style>
+
       <audio ref={remoteAudioRef} autoPlay playsInline />
 
       {/* Header */}
@@ -289,38 +334,20 @@ export default function Home() {
         </div>
         <p className="text-[#8892a4] text-sm">Practice English with real people, instantly</p>
 
-        {/* Notification banner */}
         {notifPermission !== "granted" && notifPermission !== "denied" && (
-          <button
-            onClick={requestNotifPermission}
-            className="mt-3 flex items-center gap-2 mx-auto px-4 py-2 rounded-full text-xs font-medium border border-yellow-500/30 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 transition-all"
-          >
-            🔔 Enable Notifications — partner mile toh alert aayega
+          <button onClick={requestNotifPermission} className="mt-3 flex items-center gap-2 mx-auto px-4 py-2 rounded-full text-xs font-medium border border-yellow-500/30 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 transition-all">
+            🔔 Enable Notifications
           </button>
         )}
         {notifPermission === "granted" && (
-          <div className="mt-3 flex items-center gap-1 justify-center text-xs text-green-400">
-            <span>✅</span> Notifications enabled
-          </div>
-        )}
-        {notifPermission === "denied" && (
-          <div className="mt-3 text-xs text-[#8892a4]">
-            🔕 Notifications blocked — browser settings se allow karo
-          </div>
+          <div className="mt-2 text-xs text-green-400">✅ Notifications enabled</div>
         )}
 
-        {/* Tab switcher */}
         <div className="flex items-center justify-center gap-2 mt-4">
-          <button
-            onClick={() => setActiveTab("call")}
-            className={`px-5 py-2 rounded-full text-sm font-semibold transition-all ${activeTab === "call" ? "bg-cyan-600 text-white" : "bg-[#1e2535] text-[#8892a4] hover:text-white"}`}
-          >
+          <button onClick={() => setActiveTab("call")} className={`px-5 py-2 rounded-full text-sm font-semibold transition-all ${activeTab === "call" ? "bg-cyan-600 text-white" : "bg-[#1e2535] text-[#8892a4] hover:text-white"}`}>
             🎙️ Practice
           </button>
-          <button
-            onClick={() => setActiveTab("stats")}
-            className={`px-5 py-2 rounded-full text-sm font-semibold transition-all ${activeTab === "stats" ? "bg-cyan-600 text-white" : "bg-[#1e2535] text-[#8892a4] hover:text-white"}`}
-          >
+          <button onClick={() => setActiveTab("stats")} className={`px-5 py-2 rounded-full text-sm font-semibold transition-all ${activeTab === "stats" ? "bg-cyan-600 text-white" : "bg-[#1e2535] text-[#8892a4] hover:text-white"}`}>
             📊 My Stats
           </button>
         </div>
@@ -328,10 +355,10 @@ export default function Home() {
 
       <main className="w-full max-w-4xl">
 
-        {/* ── STATS TAB ── */}
+        {/* STATS TAB */}
         {activeTab === "stats" && (
           <div className="w-full max-w-md mx-auto bg-[#161b24] border border-white/10 rounded-3xl p-8 shadow-2xl">
-            <h2 className="text-xl font-bold text-white mb-6 text-center" style={{ fontFamily: "'Sora', sans-serif" }}>📊 Practice Stats</h2>
+            <h2 className="text-xl font-bold text-white mb-6 text-center">📊 Practice Stats</h2>
             <div className="grid grid-cols-2 gap-4 mb-6">
               {[
                 { label: "Total Sessions", value: stats.totalSessions, icon: "🎯" },
@@ -346,22 +373,15 @@ export default function Home() {
                 </div>
               ))}
             </div>
-            {stats.totalSessions === 0 && (
-              <p className="text-center text-[#8892a4] text-sm">No sessions yet. Start practicing! 🚀</p>
-            )}
+            {stats.totalSessions === 0 && <p className="text-center text-[#8892a4] text-sm">No sessions yet. Start practicing! 🚀</p>}
             <button
-              onClick={() => {
-                const empty = { totalSessions: 0, totalSeconds: 0, todaySessions: 0, todaySeconds: 0 };
-                saveStats(empty); setStats(empty);
-              }}
+              onClick={() => { const e = { totalSessions: 0, totalSeconds: 0, todaySessions: 0, todaySeconds: 0 }; saveStats(e); setStats(e); }}
               className="w-full mt-2 py-2 rounded-xl text-xs text-[#8892a4] border border-white/10 hover:text-red-400 hover:border-red-400/30 transition-all"
-            >
-              Reset Stats
-            </button>
+            >Reset Stats</button>
           </div>
         )}
 
-        {/* ── CALL TAB ── */}
+        {/* CALL TAB */}
         {activeTab === "call" && (
           <div className={`flex gap-4 ${status === "connected" && showChat ? "flex-col md:flex-row items-start justify-center" : "justify-center"}`}>
 
@@ -372,53 +392,30 @@ export default function Home() {
               {status === "idle" && (
                 <div className="flex flex-col items-center gap-5 text-center w-full">
                   {partnerLeft && (
-                    <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-2 rounded-full text-sm">
-                      Your partner has left the chat.
-                    </div>
+                    <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-2 rounded-full text-sm">Your partner has left the chat.</div>
                   )}
                   <div className="text-6xl">🌐</div>
                   <h2 className="text-2xl font-bold text-white" style={{ fontFamily: "'Sora', sans-serif" }}>Ready to speak?</h2>
-
-                  {/* Level Filter */}
                   <div className="w-full">
                     <label className="text-xs text-[#8892a4] uppercase tracking-widest font-semibold mb-2 block">⭐ Your Level</label>
                     <div className="flex gap-2 justify-center flex-wrap">
                       {LEVELS.map((level) => (
-                        <button
-                          key={level}
-                          onClick={() => setSelectedLevel(level)}
-                          className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${selectedLevel === level ? "bg-cyan-600 text-white" : "bg-[#1e2535] text-[#8892a4] border border-white/10 hover:text-white"}`}
-                        >
+                        <button key={level} onClick={() => setSelectedLevel(level)} className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${selectedLevel === level ? "bg-cyan-600 text-white" : "bg-[#1e2535] text-[#8892a4] border border-white/10 hover:text-white"}`}>
                           {level}
                         </button>
                       ))}
                     </div>
                   </div>
-
-                  {/* Country Filter */}
                   <div className="w-full">
                     <label className="text-xs text-[#8892a4] uppercase tracking-widest font-semibold mb-2 block">🌍 Your Country</label>
-                    <select
-                      value={selectedCountry}
-                      onChange={(e) => setSelectedCountry(e.target.value)}
-                      className="w-full bg-[#1e2535] border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors"
-                    >
-                      {COUNTRIES.map((c) => (
-                        <option key={c} value={c} style={{ background: "#1e2535" }}>{c === "Any" ? "🌍 Any Country" : c}</option>
-                      ))}
+                    <select value={selectedCountry} onChange={(e) => setSelectedCountry(e.target.value)} className="w-full bg-[#1e2535] border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors">
+                      {COUNTRIES.map((c) => <option key={c} value={c} style={{ background: "#1e2535" }}>{c === "Any" ? "🌍 Any Country" : c}</option>)}
                     </select>
                   </div>
-
-                  <button
-                    onClick={handleStart}
-                    className="w-full py-3 rounded-full font-bold text-[#0d0f14] transition-all hover:-translate-y-1"
-                    style={{ background: "linear-gradient(135deg, #4ade80, #16a34a)", boxShadow: "0 4px 20px #4ade8050" }}
-                  >
+                  <button onClick={handleStart} className="w-full py-3 rounded-full font-bold text-[#0d0f14] transition-all hover:-translate-y-1" style={{ background: "linear-gradient(135deg, #4ade80, #16a34a)", boxShadow: "0 4px 20px #4ade8050" }}>
                     Find a Partner
                   </button>
-                  <p className="text-xs text-[#8892a4]">
-                    Level: <span className="text-cyan-400">{selectedLevel}</span> · Country: <span className="text-cyan-400">{selectedCountry}</span>
-                  </p>
+                  <p className="text-xs text-[#8892a4]">Level: <span className="text-cyan-400">{selectedLevel}</span> · Country: <span className="text-cyan-400">{selectedCountry}</span></p>
                 </div>
               )}
 
@@ -431,47 +428,79 @@ export default function Home() {
                     Looking for <span className="text-cyan-400">{selectedLevel}</span> level
                     {selectedCountry !== "Any" && <> from <span className="text-cyan-400">{selectedCountry}</span></>}
                   </p>
-                  <p className="text-xs text-yellow-400/70">🔔 Tab minimize karo — partner mile toh notification aayega</p>
-                  <button onClick={handleDisconnect} className="px-6 py-2 rounded-full text-[#8892a4] bg-[#1e2535] border border-white/10 hover:text-white transition-all text-sm">
-                    Cancel
-                  </button>
+                  <button onClick={handleDisconnect} className="px-6 py-2 rounded-full text-[#8892a4] bg-[#1e2535] border border-white/10 hover:text-white transition-all text-sm">Cancel</button>
                 </div>
               )}
 
               {/* CONNECTED */}
               {status === "connected" && (
-                <div className="flex flex-col items-center gap-4 text-center w-full">
+                <div className="flex flex-col items-center gap-4 text-center w-full relative">
+
+                  {/* Floating reactions */}
+                  <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                    {floatingReactions.map((r) => (
+                      <div key={r.id} className="float-reaction" style={{ left: `${r.x}%`, bottom: "80px" }}>
+                        {r.emoji}
+                        {r.from === "partner" && <span className="text-xs absolute -top-3 left-0 text-[#8892a4]">👤</span>}
+                      </div>
+                    ))}
+                  </div>
+
                   <div className="flex items-center gap-2 bg-green-400/10 border border-green-400/30 px-4 py-1.5 rounded-full">
                     <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
                     <span className="text-green-400 text-sm font-semibold">Connected</span>
                   </div>
+
                   <div className="text-5xl font-bold text-white tracking-widest" style={{ fontFamily: "'Sora', sans-serif" }}>{fmt(timer)}</div>
+
                   <div className="bg-[#1e2535] border border-white/10 rounded-2xl p-4 w-full text-left">
                     <span className="block text-xs text-cyan-400 uppercase tracking-widest font-semibold mb-1">Today&apos;s Topic 💬</span>
                     <p className="text-white font-semibold leading-relaxed">{topic}</p>
                   </div>
+
+                  {/* Reaction picker */}
+                  {showReactions && (
+                    <div className="pop-in flex flex-wrap gap-2 justify-center bg-[#1e2535] border border-white/10 rounded-2xl p-3 w-full">
+                      {REACTIONS.map((emoji) => (
+                        <button key={emoji} onClick={() => sendReaction(emoji)} className="text-2xl hover:scale-125 transition-transform active:scale-95 p-1">
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-3 flex-wrap justify-center">
                     <button onClick={toggleMute} className={`flex flex-col items-center gap-1 px-4 py-3 rounded-xl border transition-all text-xl min-w-[70px] bg-[#1e2535] ${isMuted ? "border-red-400/40 text-red-400" : "border-white/10 text-[#8892a4] hover:text-white"}`}>
                       {isMuted ? "🔇" : "🎙️"}<span className="text-xs">{isMuted ? "Unmute" : "Mute"}</span>
                     </button>
+
+                    {/* React button */}
+                    <button
+                      onClick={() => setShowReactions((s) => !s)}
+                      className={`flex flex-col items-center gap-1 px-4 py-3 rounded-xl border transition-all text-xl min-w-[70px] bg-[#1e2535] ${showReactions ? "border-yellow-400/40 text-yellow-400" : "border-white/10 text-[#8892a4] hover:text-white"}`}
+                    >
+                      😊<span className="text-xs">React</span>
+                    </button>
+
                     <button
                       onClick={() => { setShowChat((s) => !s); setUnread(0); showChatRef.current = !showChatRef.current; }}
                       className="relative flex flex-col items-center gap-1 px-4 py-3 rounded-xl border transition-all text-xl min-w-[70px] bg-[#1e2535] border-white/10 text-[#8892a4] hover:text-white"
                     >
                       💬<span className="text-xs">Chat</span>
-                      {unread > 0 && (
-                        <span className="absolute -top-1 -right-1 w-5 h-5 bg-cyan-500 rounded-full text-[10px] font-bold text-white flex items-center justify-center animate-bounce">{unread}</span>
-                      )}
+                      {unread > 0 && <span className="absolute -top-1 -right-1 w-5 h-5 bg-cyan-500 rounded-full text-[10px] font-bold text-white flex items-center justify-center animate-bounce">{unread}</span>}
                     </button>
+
                     <button onClick={handleSkip} className="px-6 py-3 rounded-full font-bold text-[#0d0f14] transition-all hover:-translate-y-1" style={{ background: "linear-gradient(135deg, #22d3ee, #0891b2)", boxShadow: "0 4px 20px #22d3ee40" }}>
                       ⏭ Next
                     </button>
+
                     <button onClick={handleDisconnect} className="flex flex-col items-center gap-1 px-4 py-3 rounded-xl border border-white/10 bg-[#1e2535] text-[#8892a4] hover:text-red-400 hover:border-red-400/40 transition-all text-xl min-w-[70px]">
                       📵<span className="text-xs">Leave</span>
                     </button>
                   </div>
+
                   <p className="text-xs text-[#8892a4] bg-white/5 rounded-lg px-3 py-2 w-full leading-relaxed">
-                    💡 Tip: Speak slowly and clearly. Don&apos;t worry about mistakes!
+                    💡 Tip: React karo 😊 button se partner ko encourage karo!
                   </p>
                 </div>
               )}
@@ -482,9 +511,7 @@ export default function Home() {
                   <div className="text-6xl">⚠️</div>
                   <h2 className="text-2xl font-bold text-white">Oops!</h2>
                   <p className="text-red-400 text-sm">{errorMsg}</p>
-                  <button onClick={() => setStatus("idle")} className="px-8 py-3 rounded-full font-bold text-[#0d0f14]" style={{ background: "linear-gradient(135deg, #4ade80, #16a34a)" }}>
-                    Try Again
-                  </button>
+                  <button onClick={() => setStatus("idle")} className="px-8 py-3 rounded-full font-bold text-[#0d0f14]" style={{ background: "linear-gradient(135deg, #4ade80, #16a34a)" }}>Try Again</button>
                 </div>
               )}
             </div>
@@ -493,16 +520,11 @@ export default function Home() {
             {status === "connected" && showChat && (
               <div className="w-full md:w-80 bg-[#161b24] border border-white/10 rounded-3xl flex flex-col overflow-hidden" style={{ height: 460 }}>
                 <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
-                  <div className="flex items-center gap-2">
-                    <span>💬</span>
-                    <span className="font-semibold text-white text-sm">Live Chat</span>
-                  </div>
+                  <div className="flex items-center gap-2"><span>💬</span><span className="font-semibold text-white text-sm">Live Chat</span></div>
                   <button onClick={() => { setShowChat(false); showChatRef.current = false; }} className="text-[#8892a4] hover:text-white text-lg">✕</button>
                 </div>
                 <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-2">
-                  {messages.length === 0 && (
-                    <div className="text-center text-[#8892a4] text-xs mt-10 leading-relaxed">No messages yet.<br />Say hi! 👋</div>
-                  )}
+                  {messages.length === 0 && <div className="text-center text-[#8892a4] text-xs mt-10 leading-relaxed">No messages yet.<br />Say hi! 👋</div>}
                   {messages.map((msg, i) => (
                     <div key={i} className={`flex flex-col ${msg.from === "me" ? "items-end" : "items-start"}`}>
                       <div className={`px-4 py-2.5 rounded-2xl text-sm max-w-[85%] leading-relaxed ${msg.from === "me" ? "bg-cyan-600 text-white rounded-br-sm" : "bg-[#1e2535] text-white rounded-bl-sm"}`}>
@@ -522,14 +544,7 @@ export default function Home() {
                     maxLength={300}
                     className="flex-1 bg-[#1e2535] border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-[#8892a4] outline-none focus:border-cyan-500/50 transition-colors"
                   />
-                  <button
-                    onClick={sendMessage}
-                    disabled={!chatInput.trim()}
-                    className="w-10 h-10 rounded-xl flex items-center justify-center text-base transition-all disabled:opacity-30 flex-shrink-0"
-                    style={{ background: chatInput.trim() ? "linear-gradient(135deg, #22d3ee, #0891b2)" : "#1e2535" }}
-                  >
-                    ➤
-                  </button>
+                  <button onClick={sendMessage} disabled={!chatInput.trim()} className="w-10 h-10 rounded-xl flex items-center justify-center text-base transition-all disabled:opacity-30 flex-shrink-0" style={{ background: chatInput.trim() ? "linear-gradient(135deg, #22d3ee, #0891b2)" : "#1e2535" }}>➤</button>
                 </div>
               </div>
             )}
@@ -538,7 +553,7 @@ export default function Home() {
       </main>
 
       <footer className="mt-8 text-[#8892a4] text-xs text-center">
-        No login required · Voice + Chat · 100% free
+        No login required · Voice + Chat + Reactions · 100% free
       </footer>
     </div>
   );

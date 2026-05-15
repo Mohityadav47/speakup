@@ -26,17 +26,9 @@ function getRandomTopic() {
 // waitingQueue: array of { id, level, country }
 let waitingQueue = [];
 const activePairs = {};
-const httpServer = createServer((req, res) => {
-  res.writeHead(200);
-  res.end("OK");
-});
-const io = new Server(httpServer, {
-  cors: {
-    origin: ["https://speakup-pink.vercel.app", "http://localhost:3000"],
-    methods: ["GET", "POST"],
-    credentials: true
-  }
-});
+
+const httpServer = createServer();
+const io = new Server(httpServer, { cors: { origin: "*" } });
 
 // Find best match — same level preferred, same country bonus
 function findMatch(socket, level, country) {
