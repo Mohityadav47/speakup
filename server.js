@@ -26,8 +26,12 @@ function getRandomTopic() {
 // waitingQueue: array of { id, level, country }
 let waitingQueue = [];
 const activePairs = {};
-
-const httpServer = createServer();
+const httpServer = createServer((req, res) => {
+  if (req.url === "/" || req.url === "/health") {
+    res.writeHead(200);
+    res.end("OK");
+  }
+});
 const io = new Server(httpServer, { cors: { origin: "*" } });
 
 // Find best match — same level preferred, same country bonus
@@ -87,6 +91,12 @@ io.on("connection", (socket) => {
     console.log("chat from:", socket.id, "msg:", message);
     const partnerId = activePairs[socket.id];
     if (partnerId) io.to(partnerId).emit("chat-message", { text: message });
+  });
+
+  // Reaction event
+  socket.on("reaction", (emoji) => {
+    const partnerId = activePairs[socket.id];
+    if (partnerId) io.to(partnerId).emit("reaction", emoji);
   });
 
   socket.on("leave", () => {

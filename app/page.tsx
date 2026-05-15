@@ -211,7 +211,13 @@ export default function Home() {
   };
 
   useEffect(() => {
-    const socket = io(SOCKET_URL, { transports: ["websocket"] });
+    const socket = io(SOCKET_URL, {
+  transports: ["polling", "websocket"],
+  reconnectionAttempts: 10,
+  reconnectionDelay: 2000,
+  reconnectionDelayMax: 10000,
+  timeout: 20000,
+});
     socketRef.current = socket;
     socket.on("connect", () => console.log("Socket connected:", socket.id));
     setupSocketListeners(socket);
