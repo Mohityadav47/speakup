@@ -32,7 +32,13 @@ const httpServer = createServer((req, res) => {
     res.end("OK");
   }
 });
-const io = new Server(httpServer, { cors: { origin: "*" } });
+const io = new Server(httpServer, {
+  cors: {
+    origin: ["https://speakup-pink.vercel.app", "http://localhost:3000"],
+    methods: ["GET", "POST"],
+    credentials: true
+  }
+});
 
 // Find best match — same level preferred, same country bonus
 function findMatch(socket, level, country) {
