@@ -27,10 +27,8 @@ function getRandomTopic() {
 let waitingQueue = [];
 const activePairs = {};
 const httpServer = createServer((req, res) => {
-  if (req.url === "/" || req.url === "/health") {
-    res.writeHead(200);
-    res.end("OK");
-  }
+  res.writeHead(200);
+  res.end("OK");
 });
 const io = new Server(httpServer, {
   cors: {
