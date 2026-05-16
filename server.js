@@ -1,123 +1,136 @@
-const { createServer } = require("http");
+const express = require("express");
+const http = require("http");
 const { Server } = require("socket.io");
+const cors = require("cors");
+
+const app = express();
+app.use(cors());
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
+// Waiting queue — users waiting for a partner
+let waitingQueue = [];
+
+// Active pairs — socketId -> partnerSocketId
+let activePairs = {};
 
 const TOPICS = [
-  "What is your favourite food and why?",
-  "What is your dream job?",
-  "What is the best trip you have ever taken?",
-  "What is your favourite movie or TV show?",
-  "If you had a superpower, what would you choose?",
-  "What are your plans for this weekend?",
-  "What hobby do you enjoy the most?",
-  "If you were famous for one day, what would you do?",
-  "What is your favourite season and why?",
-  "How has technology changed your life?",
-  "What is something new you learned recently?",
-  "What kind of music do you like and why?",
-  "If you could live anywhere, where would it be?",
-  "What is a goal you are working towards?",
-  "Describe your perfect day.",
+  "Apna favourite food kya hai aur kyun?",
+  "Aapka dream job kya hai?",
+  "Aapne abhi tak ki best trip kahan ki?",
+  "Aapka favourite movie/show kaunsa hai?",
+  "Agar aapke paas superpower hoti toh kya chahte?",
+  "Apne weekend ke plans batao.",
+  "Aapko kaunsa hobby pasand hai?",
+  "Agar aap ek din ke liye famous hote toh kya karte?",
+  "Aapka favourite season kaunsa hai aur kyun?",
+  "Technology ne life kaise change ki hai?",
 ];
 
 function getRandomTopic() {
   return TOPICS[Math.floor(Math.random() * TOPICS.length)];
 }
 
-// waitingQueue: array of { id, level, country }
-let waitingQueue = [];
-const activePairs = {};
-
-const httpServer = createServer();
-const io = new Server(httpServer, { cors: { origin: "*" } });
-
-// Find best match — same level preferred, same country bonus
-function findMatch(socket, level, country) {
-  if (waitingQueue.length === 0) return null;
-
-  // Priority 1: same level + same country
-  let idx = waitingQueue.findIndex(u => u.level === level && u.country === country);
-  if (idx !== -1) return idx;
-
-  // Priority 2: same level, any country
-  idx = waitingQueue.findIndex(u => u.level === level);
-  if (idx !== -1) return idx;
-
-  // Priority 3: any user
-  return 0;
-}
-
 io.on("connection", (socket) => {
-  console.log("Connected:", socket.id);
+  console.log("User connected:", socket.id);
 
-  socket.on("find-partner", ({ level = "any", country = "any" } = {}) => {
-    const idx = findMatch(socket, level, country);
-
-    if (idx !== -1) {
-      const partner = waitingQueue.splice(idx, 1)[0];
-      const partnerSocket = io.sockets.sockets.get(partner.id);
+  // User wants to find a partner
+  socket.on("find-partner", () => {
+    // If someone already waiting, pair them
+    if (waitingQueue.length > 0) {
+      const partnerId = waitingQueue.shift();
+      const partnerSocket = io.sockets.sockets.get(partnerId);
 
       if (!partnerSocket) {
-        // Partner disconnected, add self to queue
-        waitingQueue.push({ id: socket.id, level, country });
-        socket.emit("waiting");
+        // Partner disconnected while waiting, try again
+        socket.emit("find-partner");
         return;
       }
 
-      activePairs[socket.id] = partner.id;
-      activePairs[partner.id] = socket.id;
+      // Create pair
+      activePairs[socket.id] = partnerId;
+      activePairs[partnerId] = socket.id;
 
       const topic = getRandomTopic();
-      socket.emit("partner-found", { initiator: true, topic, partnerLevel: partner.level, partnerCountry: partner.country });
-      partnerSocket.emit("partner-found", { initiator: false, topic, partnerLevel: level, partnerCountry: country });
 
-      console.log(`Paired: ${socket.id}(${level}/${country}) <-> ${partner.id}(${partner.level}/${partner.country})`);
+      // Notify both — caller initiates WebRTC
+      socket.emit("partner-found", { initiator: true, topic });
+      partnerSocket.emit("partner-found", { initiator: false, topic });
+
+      console.log(`Paired: ${socket.id} <-> ${partnerId}`);
     } else {
-      waitingQueue.push({ id: socket.id, level, country });
+      // Add to waiting queue
+      waitingQueue.push(socket.id);
       socket.emit("waiting");
-      console.log(`Waiting: ${socket.id} (${level}/${country})`);
+      console.log(`Waiting: ${socket.id}`);
     }
   });
 
+  // WebRTC Signaling — forward offer/answer/ice to partner
   socket.on("signal", (data) => {
     const partnerId = activePairs[socket.id];
-    if (partnerId) io.to(partnerId).emit("signal", data);
+    if (partnerId) {
+      io.to(partnerId).emit("signal", data);
+    }
   });
 
-  socket.on("chat-message", (message) => {
-    console.log("chat from:", socket.id, "msg:", message);
-    const partnerId = activePairs[socket.id];
-    if (partnerId) io.to(partnerId).emit("chat-message", { text: message });
-  });
-
-  // Reaction event
-  socket.on("reaction", (emoji) => {
-    const partnerId = activePairs[socket.id];
-    if (partnerId) io.to(partnerId).emit("reaction", emoji);
-  });
-
-  socket.on("leave", () => {
-    waitingQueue = waitingQueue.filter((u) => u.id !== socket.id);
-    const partnerId = activePairs[socket.id];
-    if (partnerId) { io.to(partnerId).emit("partner-left"); delete activePairs[partnerId]; }
-    delete activePairs[socket.id];
-  });
-
+  // User skips current partner
   socket.on("skip", () => {
     const partnerId = activePairs[socket.id];
-    if (partnerId) { io.to(partnerId).emit("partner-left"); delete activePairs[partnerId]; }
+    if (partnerId) {
+      io.to(partnerId).emit("partner-left");
+      delete activePairs[partnerId];
+    }
     delete activePairs[socket.id];
+
+    // Put back in queue
+    waitingQueue.push(socket.id);
     socket.emit("waiting");
   });
 
+/////socket on chate k lie
+
+  socket.on("chat-message", (message) => {
+  const partnerId = activePairs[socket.id];
+  if (partnerId) {
+    io.to(partnerId).emit("chat-message", { text: message });
+  }
+});
+/////////dsicnect ke liye update
+socket.on("leave", () => {
+  waitingQueue = waitingQueue.filter((id) => id !== socket.id);
+  const partnerId = activePairs[socket.id];
+  if (partnerId) {
+    io.to(partnerId).emit("partner-left");
+    delete activePairs[partnerId];
+  }
+  delete activePairs[socket.id];
+});
+
+  // User disconnects
   socket.on("disconnect", () => {
-    waitingQueue = waitingQueue.filter((u) => u.id !== socket.id);
+    console.log("User disconnected:", socket.id);
+
+    // Remove from waiting queue
+    waitingQueue = waitingQueue.filter((id) => id !== socket.id);
+
+    // Notify partner
     const partnerId = activePairs[socket.id];
-    if (partnerId) { io.to(partnerId).emit("partner-left"); delete activePairs[partnerId]; }
+    if (partnerId) {
+      io.to(partnerId).emit("partner-left");
+      delete activePairs[partnerId];
+    }
     delete activePairs[socket.id];
-    console.log("Disconnected:", socket.id);
   });
 });
 
-httpServer.listen(process.env.PORT || 3001, () =>
-  console.log(`Socket.io server running on port ${process.env.PORT || 3001}`)
-);
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
