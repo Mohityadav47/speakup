@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 
-const SOCKET_URL = "https://speakup-production-c093.up.railway.app";
+const SOCKET_URL = "https://speakup-production-dc09.up.railway.app";
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
